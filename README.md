@@ -1,8 +1,10 @@
 # 🌾 Telangana Mandi Price Intelligence Engine
 
-An end-to-end, climate-conditioned agricultural pricing intelligence engine built for farmers and buyers in the **Jagtial, Korutla, and Nizamabad** agricultural belt of Telangana. 
+Access the live model dashboard here: [Open the app](https://telangana-crop-price-engine.streamlit.app/)
 
-Designed specifically to tackle **information asymmetry** and **middleman distress pricing** exacerbated by **El Niño climate disruptions**, this platform predicts daily fair settlement prices, dynamic negotiation corridors ($P_{10}$ floor, $P_{50}$ fair price, $P_{90}$ quality ceiling), regional mandi arbitrage spreads, and net take-home realization after logistics deductions.
+An end-to-end, climate-conditioned agricultural pricing intelligence engine built for farmers and buyers in the **Jagtial, Korutla, and Nizamabad** agricultural belt of Telangana.
+
+Designed specifically to tackle **information asymmetry** and **middleman distress pricing** exacerbated by **El Niño climate disruptions**, this platform predicts daily fair settlement prices, dy...
 
 ---
 
@@ -23,7 +25,7 @@ Designed specifically to tackle **information asymmetry** and **middleman distre
 
 * **Transport & Net Take-Home Realization Calculator:**
   * Compares **Jagtial APMC (Local)** vs. **Nizamabad Mandi** and **Warangal APMC**.
-  * Factors in vehicle type (Auto-Trolley, Tractor, 10-Ton Truck), distance, freight, diesel, mandi loading/unloading (Hamali), and 1% APMC cess to determine whether traveling to an alternative market is economically viable.
+  * Factors in vehicle type (Auto-Trolley, Tractor, 10-Ton Truck), distance, freight, diesel, mandi loading/unloading (Hamali), and 1% APMC cess to determine whether traveling to an alternative ma...
 
 * **Moisture Penalty Modeling:**
   * Adjusts price expectations dynamically when produce moisture exceeds standard limits ($> 17\%$).
@@ -66,3 +68,4 @@ telangana-crop-price-engine/
 ├── .dockerignore                   # Docker exclusion patterns
 ├── requirements.txt                # Pinned project dependencies
 └── README.md                       # Documentation
+```
