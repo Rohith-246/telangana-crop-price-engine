@@ -605,7 +605,7 @@ st.link_button(
     width="stretch",
 )
 
-# AI Advisory Chatbot Section
+# AI Advisory Chatbot Section with Real-Time Word Streaming & Fast TTS
 st.markdown("---")
 st.subheader(T["chat_title"])
 st.caption(T["chat_caption"])
@@ -665,48 +665,51 @@ CURRENT CONTEXT:
 - Floor (P10): ₹{p10:,.0f} / qtl | Fair (P50): ₹{p50:,.0f} / qtl | Ceiling (P90): ₹{p90:,.0f} / qtl
 - Nizamabad Benchmark: ₹{nizamabad_price:,.0f} / qtl
 
-STRICT LENGTH & VOICE SPEED INSTRUCTIONS:
-1. Provide a sharp, concise answer of EXACTLY 2 to 3 sentences maximum. Keep it direct and fast to read.
-2. In Telugu, use natural Telangana spoken cadence. Avoid mixed English vocabulary. State the numbers and advice clearly.
-3. If an offer is below P10, tell them to reject it immediately and attend the APMC public auction between 10:00 AM and 1:00 PM.
+STRICT INSTRUCTIONS FOR FAST GENERATION AND NATURAL SPEECH:
+1. Provide a direct, actionable answer in EXACTLY 2 to 3 sentences. No bullet points or long introductions.
+2. In Telugu, respond exclusively in spoken rural Telangana Telugu without mixing English script words. Spell numbers out clearly.
+3. If the dealer offer is below the P10 floor, instruct the farmer to reject the offer immediately and bring the produce to the regulated APMC auction (10:00 AM to 1:00 PM).
 """
 
     with st.chat_message("assistant"):
-      with st.spinner("Analyzing mandi dynamics..."):
-        reply = None
-        last_error = None
+      message_placeholder = st.empty()
+      full_reply = ""
+      last_error = None
 
-        for attempt in range(3):
-          try:
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    temperature=0.2,
-                ),
-            )
-            if response and response.text:
-              reply = response.text
-              break
-          except Exception as e:
-            last_error = e
-            time.sleep(1.0 * (attempt + 1))
-            continue
-
-        if reply:
-          st.markdown(reply)
-          # Auto-detects Telugu script vs English and selects Mohan vs Prabhat
-          audio_bytes = text_to_speech_audio(reply)
-          if audio_bytes:
-            st.audio(audio_bytes, format="audio/mp3")
-
-          st.session_state.chat_history.append(
-              {"role": "assistant", "content": reply, "audio": audio_bytes}
+      # Fast real-time token streaming
+      for attempt in range(2):
+        try:
+          stream_response = client.models.generate_content_stream(
+              model="gemini-3.8-flash",
+              contents=prompt,
+              config=types.GenerateContentConfig(
+                  system_instruction=system_instruction,
+                  temperature=0.2,
+              ),
           )
-        else:
-          err_msg = f"AI Service Error: {last_error}"
-          st.error(err_msg)
-          st.session_state.chat_history.append(
-              {"role": "assistant", "content": err_msg, "audio": None}
-          )
+          for chunk in stream_response:
+            if chunk.text:
+              full_reply += chunk.text
+              message_placeholder.markdown(full_reply + "▌")
+          message_placeholder.markdown(full_reply)
+          break
+        except Exception as e:
+          last_error = e
+          time.sleep(1.0)
+          continue
+
+      if full_reply:
+        # Generate neural audio after text is already visible on screen
+        audio_bytes = text_to_speech_audio(full_reply)
+        if audio_bytes:
+          st.audio(audio_bytes, format="audio/mp3")
+
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": full_reply, "audio": audio_bytes}
+        )
+      else:
+        err_msg = f"AI Service Error: {last_error}"
+        st.error(err_msg)
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": err_msg, "audio": None}
+        )
