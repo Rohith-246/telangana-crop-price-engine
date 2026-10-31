@@ -6,4 +6,4 @@ plotly
 google-genai
 lightgbm
 scikit-learn
-gTTS
+edge-tts

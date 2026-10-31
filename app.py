@@ -1,9 +1,11 @@
+import asyncio
+import io
 import os
 import time
-import io
 import urllib.parse
 from datetime import datetime, timedelta
 
+import edge_tts
 from google import genai
 from google.genai import types
 import joblib
@@ -11,7 +13,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from gtts import gTTS
 
 st.set_page_config(
     page_title="Telangana Mandi Price Intelligence",
@@ -20,58 +21,68 @@ st.set_page_config(
 )
 
 
-# Helper: Generate audio bytes for Telugu or English
+# Helper: Generate authentic neural speech via edge-tts (Mohan for Telugu, Prabhat for Indian English)
 def text_to_speech_audio(text: str, lang_code: str = "te"):
-    try:
-        # Strip bold/markdown tokens so audio reads cleanly
-        clean_text = (
-            text.replace("**", "")
-            .replace("*", "")
-            .replace("#", "")
-            .replace("`", "")
-            .strip()
-        )
-        tts = gTTS(text=clean_text, lang=lang_code, slow=False)
-        audio_buffer = io.BytesIO()
-        tts.write_to_fp(audio_buffer)
-        audio_buffer.seek(0)
-        return audio_buffer.read()
-    except Exception:
-        return None
+  try:
+    # Clean markdown and currency symbols for smooth phonetic pronunciation
+    clean_text = (
+        text.replace("**", "")
+        .replace("*", "")
+        .replace("#", "")
+        .replace("`", "")
+        .replace("₹", " రూపాయలు ")
+        .replace("/qtl", " ప్రతి క్వింటాలు ")
+        .replace("/-", " రూపాయలు")
+        .strip()
+    )
+
+    voice = "te-IN-MohanNeural" if lang_code == "te" else "en-IN-PrabhatNeural"
+
+    async def _generate():
+      communicate = edge_tts.Communicate(clean_text, voice)
+      audio_data = b""
+      async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+          audio_data += chunk["data"]
+      return audio_data
+
+    return asyncio.run(_generate())
+  except Exception:
+    return None
 
 
 # Automated date sync helper: Ensures dates match today's real calendar date
 @st.cache_data(ttl=3600)
 def load_and_sync_data():
-    df = pd.read_csv("data/engineered_features.csv")
-    df["date"] = pd.to_datetime(df["date"])
+  df = pd.read_csv("data/engineered_features.csv")
+  df["date"] = pd.to_datetime(df["date"])
 
-    today = pd.to_datetime(datetime.now().date())
-    last_date = df["date"].max()
+  today = pd.to_datetime(datetime.now().date())
+  last_date = df["date"].max()
 
-    if last_date < today:
-        delta_days = (today - last_date).days
-        new_records = []
-        for crop in df["crop"].unique():
-            c_slice = df[df["crop"] == crop].sort_values("date")
-            last_record = c_slice.iloc[-1].to_dict()
-            cur_price = last_record["modal_price"]
-            cur_arr = last_record["arrivals_qtl"]
+  if last_date < today:
+    delta_days = (today - last_date).days
+    new_records = []
+    for crop in df["crop"].unique():
+      c_slice = df[df["crop"] == crop].sort_values("date")
+      last_record = c_slice.iloc[-1].to_dict()
+      cur_price = last_record["modal_price"]
+      cur_arr = last_record["arrivals_qtl"]
 
-            for d in range(1, delta_days + 1):
-                synced_date = last_date + timedelta(days=d)
-                cur_price += np.random.normal(2.0, 8.0)
-                rec = last_record.copy()
-                rec["date"] = synced_date
-                rec["modal_price"] = round(cur_price, 2)
-                rec["price_lag_1"] = last_record["modal_price"]
-                rec["arrivals_qtl"] = round(cur_arr * np.random.uniform(0.96, 1.04), 1)
-                new_records.append(rec)
-        if new_records:
-            df = pd.concat([df, pd.DataFrame(new_records)], ignore_index=True)
-            df.to_csv("data/engineered_features.csv", index=False)
+      for d in range(1, delta_days + 1):
+        synced_date = last_date + timedelta(days=d)
+        cur_price += np.random.normal(2.0, 8.0)
+        rec = last_record.copy()
+        rec["date"] = synced_date
+        rec["modal_price"] = round(cur_price, 2)
+        rec["price_lag_1"] = last_record["modal_price"]
+        rec["arrivals_qtl"] = round(cur_arr * np.random.uniform(0.96, 1.04), 1)
+        new_records.append(rec)
+    if new_records:
+      df = pd.concat([df, pd.DataFrame(new_records)], ignore_index=True)
+      df.to_csv("data/engineered_features.csv", index=False)
 
-    return df
+  return df
 
 
 df = load_and_sync_data()
@@ -112,7 +123,6 @@ LANG = {
         "chat_title": "💬 Rythu Sahayata AI Chatbot (Farmer Advisory)",
         "chat_caption": "Ask in English, Telugu, or Tanglish (e.g., 'Dealer 6600 isthe ivvocha?')",
         "chat_placeholder": "Ask your mandi query here...",
-        "listen_btn": "🔊 Listen to Voice Advisory",
         "audio_lang": "en",
     },
     "తెలుగు": {
@@ -149,7 +159,6 @@ LANG = {
         "chat_title": "💬 రైతు సహాయత AI చాట్‌బాట్ (మార్కెట్ సలహాదారు)",
         "chat_caption": "తెలుగు లేదా ఇంగ్లీషులో అడగండి (ఉదా: 'వ్యాపారి 6600 ఇస్తానంటే అమ్మాలా వద్దా?')",
         "chat_placeholder": "మీ సందేహాన్ని ఇక్కడ టైప్ చేయండి...",
-        "listen_btn": "🔊 వాయిస్ సలహా వినండి",
         "audio_lang": "te",
     },
 }
@@ -213,27 +222,27 @@ FEATURE_COLS = [
 # Compute in-memory baseline corridors for all crops
 @st.cache_data
 def compute_all_benchmarks(oni_val):
-    benchmarks = {}
-    for crp in crop_list:
-        c_data = df[df["crop"] == crp].sort_values("date").tail(30)
-        if c_data.empty:
-            continue
-        c_safe = crp.replace(" ", "_").replace("(", "").replace(")", "")
-        m_path = f"models/{c_safe}_models.pkl"
-        if os.path.exists(m_path):
-            m_bundle = joblib.load(m_path)
-            row = c_data.iloc[-1][FEATURE_COLS].to_dict()
-            row["oni_index"] = oni_val
-            x_in = pd.DataFrame([row])
-            c_p10 = float(m_bundle["p10"].predict(x_in)[0])
-            c_p50 = float(m_bundle["p50"].predict(x_in)[0])
-            c_p90 = float(m_bundle["p90"].predict(x_in)[0])
-            benchmarks[crp] = {
-                "p10": round(min(c_p10, c_p50)),
-                "p50": round(c_p50),
-                "p90": round(max(c_p90, c_p50)),
-            }
-    return benchmarks
+  benchmarks = {}
+  for crp in crop_list:
+    c_data = df[df["crop"] == crp].sort_values("date").tail(30)
+    if c_data.empty:
+      continue
+    c_safe = crp.replace(" ", "_").replace("(", "").replace(")", "")
+    m_path = f"models/{c_safe}_models.pkl"
+    if os.path.exists(m_path):
+      m_bundle = joblib.load(m_path)
+      row = c_data.iloc[-1][FEATURE_COLS].to_dict()
+      row["oni_index"] = oni_val
+      x_in = pd.DataFrame([row])
+      c_p10 = float(m_bundle["p10"].predict(x_in)[0])
+      c_p50 = float(m_bundle["p50"].predict(x_in)[0])
+      c_p90 = float(m_bundle["p90"].predict(x_in)[0])
+      benchmarks[crp] = {
+          "p10": round(min(c_p10, c_p50)),
+          "p50": round(c_p50),
+          "p90": round(max(c_p90, c_p50)),
+      }
+  return benchmarks
 
 
 all_benchmarks_dict = compute_all_benchmarks(oni_input)
@@ -242,10 +251,10 @@ safe_name = selected_crop.replace(" ", "_").replace("(", "").replace(")", "")
 model_path = f"models/{safe_name}_models.pkl"
 
 try:
-    models = joblib.load(model_path)
+  models = joblib.load(model_path)
 except Exception:
-    st.error("Model files not found. Run `src/model_trainer.py` first.")
-    st.stop()
+  st.error("Model files not found. Run `src/model_trainer.py` first.")
+  st.stop()
 
 latest_row = crop_data.iloc[-1][FEATURE_COLS].to_dict()
 latest_row["oni_index"] = oni_input
@@ -260,11 +269,11 @@ p90 = max(p90, p50)
 
 moisture_penalty = 0.0
 if crop_moisture > 17.0:
-    moisture_penalty = (crop_moisture - 17.0) * (p50 * 0.015)
-    p50 -= moisture_penalty
-    p10 -= moisture_penalty
-    p90 -= moisture_penalty
-    st.sidebar.warning(T["penalty_warning"].format(penalty=moisture_penalty))
+  moisture_penalty = (crop_moisture - 17.0) * (p50 * 0.015)
+  p50 -= moisture_penalty
+  p10 -= moisture_penalty
+  p90 -= moisture_penalty
+  st.sidebar.warning(T["penalty_warning"].format(penalty=moisture_penalty))
 
 st.sidebar.markdown("---")
 dealer_bid = st.sidebar.number_input(
@@ -315,15 +324,15 @@ fig.add_trace(
 )
 
 if dealer_bid > 0:
-    fig.add_trace(
-        go.Scatter(
-            x=[today_date],
-            y=[dealer_bid],
-            mode="markers",
-            marker=dict(size=14, color="#f59e0b", symbol="diamond"),
-            name="Dealer's Offer",
-        )
-    )
+  fig.add_trace(
+      go.Scatter(
+          x=[today_date],
+          y=[dealer_bid],
+          mode="markers",
+          marker=dict(size=14, color="#f59e0b", symbol="diamond"),
+          name="Dealer's Offer",
+      )
+  )
 
 fig.add_annotation(
     x=today_date,
@@ -353,15 +362,15 @@ fig.add_annotation(
     ay=15,
 )
 if dealer_bid > 0:
-    fig.add_annotation(
-        x=today_date,
-        y=dealer_bid,
-        text=f"Dealer: ₹{dealer_bid:,.0f}",
-        showarrow=True,
-        arrowhead=2,
-        ax=-70,
-        ay=0,
-    )
+  fig.add_annotation(
+      x=today_date,
+      y=dealer_bid,
+      text=f"Dealer: ₹{dealer_bid:,.0f}",
+      showarrow=True,
+      arrowhead=2,
+      ax=-70,
+      ay=0,
+  )
 
 fig.update_layout(
     yaxis_title=T["per_qtl"],
@@ -385,37 +394,37 @@ hours = [
 
 hourly_records = []
 for h_label, mult, desc in hours:
-    est_price = round(p50 * (1.0 + mult))
-    hourly_records.append({
-        "Mandi Hour": h_label,
-        "Projected Clearing Rate (₹/qtl)": f"₹{est_price:,.0f}",
-        "Variance from Equilibrium": f"{mult * 100:+.1f}%",
-        "Auction Stage / Mandi Activity": desc,
-    })
+  est_price = round(p50 * (1.0 + mult))
+  hourly_records.append({
+      "Mandi Hour": h_label,
+      "Projected Clearing Rate (₹/qtl)": f"₹{est_price:,.0f}",
+      "Variance from Equilibrium": f"{mult * 100:+.1f}%",
+      "Auction Stage / Mandi Activity": desc,
+  })
 
 st.dataframe(pd.DataFrame(hourly_records), hide_index=True, width="stretch")
 
 # Advisory
 st.subheader(T["advisory_title"])
 if dealer_bid > 0:
-    if dealer_bid >= p50:
-        st.success(T["bid_good"])
-    elif dealer_bid >= p10:
-        diff = p50 - dealer_bid
-        total_loss = diff * produce_qty
-        st.warning(
-            T["bid_warning"].format(
-                diff=diff, total_loss=total_loss, qty=produce_qty
-            )
+  if dealer_bid >= p50:
+    st.success(T["bid_good"])
+  elif dealer_bid >= p10:
+    diff = p50 - dealer_bid
+    total_loss = diff * produce_qty
+    st.warning(
+        T["bid_warning"].format(
+            diff=diff, total_loss=total_loss, qty=produce_qty
         )
-    else:
-        diff = p10 - dealer_bid
-        total_loss = diff * produce_qty
-        st.error(
-            T["bid_danger"].format(
-                diff=diff, total_loss=total_loss, qty=produce_qty
-            )
+    )
+  else:
+    diff = p10 - dealer_bid
+    total_loss = diff * produce_qty
+    st.error(
+        T["bid_danger"].format(
+            diff=diff, total_loss=total_loss, qty=produce_qty
         )
+    )
 
 st.markdown("---")
 
@@ -443,37 +452,37 @@ col_m3.metric(
 
 calc_col1, calc_col2 = st.columns(2)
 with calc_col1:
-    target_mandi = st.selectbox(
-        T["destination_mandi"],
-        ["Nizamabad Mandi (~55 km)", "Warangal APMC (~145 km)"],
-    )
-    vehicle_choice = st.selectbox(
-        T["vehicle_type"],
-        [
-            "Auto-Trolley (Max ~15-20 qtl)",
-            "Tractor-Trolley (Max ~50-60 qtl)",
-            "10-Ton Truck (Max ~100 qtl)",
-        ],
-    )
+  target_mandi = st.selectbox(
+      T["destination_mandi"],
+      ["Nizamabad Mandi (~55 km)", "Warangal APMC (~145 km)"],
+  )
+  vehicle_choice = st.selectbox(
+      T["vehicle_type"],
+      [
+          "Auto-Trolley (Max ~15-20 qtl)",
+          "Tractor-Trolley (Max ~50-60 qtl)",
+          "10-Ton Truck (Max ~100 qtl)",
+      ],
+  )
 
 if "Nizamabad" in target_mandi:
-    distance_km = 55
-    target_rate = nizamabad_price
-    mandi_name_str = "Nizamabad Mandi"
-    freight_base = (
-        1800
-        if "Auto" in vehicle_choice
-        else (3200 if "Tractor" in vehicle_choice else 5500)
-    )
+  distance_km = 55
+  target_rate = nizamabad_price
+  mandi_name_str = "Nizamabad Mandi"
+  freight_base = (
+      1800
+      if "Auto" in vehicle_choice
+      else (3200 if "Tractor" in vehicle_choice else 5500)
+  )
 else:
-    distance_km = 145
-    target_rate = warangal_price
-    mandi_name_str = "Warangal APMC"
-    freight_base = (
-        3800
-        if "Auto" in vehicle_choice
-        else (6500 if "Tractor" in vehicle_choice else 11000)
-    )
+  distance_km = 145
+  target_rate = warangal_price
+  mandi_name_str = "Warangal APMC"
+  freight_base = (
+      3800
+      if "Auto" in vehicle_choice
+      else (6500 if "Tractor" in vehicle_choice else 11000)
+  )
 
 hamali_per_bag = 16.0
 total_hamali = produce_qty * (hamali_per_bag * 2)
@@ -485,10 +494,10 @@ target_net_rev = target_gross_rev - freight_base - total_hamali - mandi_cess
 net_difference = target_net_rev - local_gross_rev
 
 with calc_col2:
-    st.write(f"**Travel Distance:** {distance_km} km (One-way from Jagtial)")
-    st.write(f"**Estimated Freight & Fuel:** ₹{freight_base:,.0f}")
-    st.write(f"**Loading/Unloading (Hamali):** ₹{total_hamali:,.0f}")
-    st.write(f"**Mandi Cess (1%):** ₹{mandi_cess:,.0f}")
+  st.write(f"**Travel Distance:** {distance_km} km (One-way from Jagtial)")
+  st.write(f"**Estimated Freight & Fuel:** ₹{freight_base:,.0f}")
+  st.write(f"**Loading/Unloading (Hamali):** ₹{total_hamali:,.0f}")
+  st.write(f"**Mandi Cess (1%):** ₹{mandi_cess:,.0f}")
 
 st.markdown("##### 💵 Net Take-Home Decision Matrix")
 r_col1, r_col2, r_col3 = st.columns(3)
@@ -508,7 +517,7 @@ st.subheader(T["slip_title"])
 today_str = datetime.now().strftime("%d-%b-%Y")
 
 if lang_choice == "తెలుగు":
-    slip_text = f"""🌾 *తెలంగాణ మార్కెట్ యార్డ్ రక్షణ ధర నివేదిక*
+  slip_text = f"""🌾 *తెలంగాణ మార్కెట్ యార్డ్ రక్షణ ధర నివేదిక*
 📅 తేదీ: {today_str} | ప్రాంతం: జగిత్యాల & నిజామాబాద్
 -----------------------------------------------
 • పంట: {selected_crop}
@@ -526,7 +535,7 @@ if lang_choice == "తెలుగు":
 ఈ నివేదిక జగిత్యాల మార్కెట్ యార్డ్ విశ్లేషణ ఆధారంగా రూపొందించబడింది.
 """
 else:
-    slip_text = f"""🌾 *TELANGANA MANDI BENCHMARK NEGOTIATION SLIP*
+  slip_text = f"""🌾 *TELANGANA MANDI BENCHMARK NEGOTIATION SLIP*
 📅 Date: {today_str} | Region: Jagtial & Nizamabad Mandi Belt
 -----------------------------------------------
 • Crop: {selected_crop}
@@ -552,12 +561,11 @@ st.link_button(
     width="stretch",
 )
 
-# AI Advisory Chatbot Section with Text-to-Speech Voice Playback
+# AI Advisory Chatbot Section with Neural TTS Voice
 st.markdown("---")
 st.subheader(T["chat_title"])
 st.caption(T["chat_caption"])
 
-# Reads from Streamlit Cloud Secrets, OS environment, or manual sidebar input
 active_api_key = (
     os.environ.get("GEMINI_API_KEY")
     or (st.secrets.get("GEMINI_API_KEY") if hasattr(st, "secrets") else None)
@@ -565,41 +573,40 @@ active_api_key = (
 )
 
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+  st.session_state.chat_history = []
 
-for idx, msg in enumerate(st.session_state.chat_history):
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        # If message has saved audio bytes, show playback
-        if msg["role"] == "assistant" and msg.get("audio"):
-            st.audio(msg["audio"], format="audio/mp3")
+for msg in st.session_state.chat_history:
+  with st.chat_message(msg["role"]):
+    st.markdown(msg["content"])
+    if msg["role"] == "assistant" and msg.get("audio"):
+      st.audio(msg["audio"], format="audio/mp3")
 
 if prompt := st.chat_input(T["chat_placeholder"]):
-    st.session_state.chat_history.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+  st.session_state.chat_history.append({"role": "user", "content": prompt})
+  with st.chat_message("user"):
+    st.markdown(prompt)
 
-    if not active_api_key:
-        with st.chat_message("assistant"):
-            warning_msg = (
-                "⚠️ Please provide a Gemini API Key via Streamlit Secrets,"
-                " terminal (`export GEMINI_API_KEY=...`), or in the sidebar to"
-                " activate the AI advisory."
-            )
-            st.warning(warning_msg)
-            st.session_state.chat_history.append(
-                {"role": "assistant", "content": warning_msg}
-            )
-    else:
-        client = genai.Client(api_key=active_api_key)
+  if not active_api_key:
+    with st.chat_message("assistant"):
+      warning_msg = (
+          "⚠️ Please provide a Gemini API Key via Streamlit Secrets,"
+          " terminal (`export GEMINI_API_KEY=...`), or in the sidebar to"
+          " activate the AI advisory."
+      )
+      st.warning(warning_msg)
+      st.session_state.chat_history.append(
+          {"role": "assistant", "content": warning_msg}
+      )
+  else:
+    client = genai.Client(api_key=active_api_key)
 
-        benchmarks_summary = "\n".join([
-            f"  - {c}: Floor (P10)=₹{vals['p10']}, Fair (P50)=₹{vals['p50']},"
-            f" Ceiling (P90)=₹{vals['p90']}"
-            for c, vals in all_benchmarks_dict.items()
-        ])
+    benchmarks_summary = "\n".join([
+        f"  - {c}: Floor (P10)=₹{vals['p10']}, Fair (P50)=₹{vals['p50']},"
+        f" Ceiling (P90)=₹{vals['p90']}"
+        for c, vals in all_benchmarks_dict.items()
+    ])
 
-        system_instruction = f"""
+    system_instruction = f"""
 You are an expert Telangana Agricultural Mandi advisor stationed in the Jagtial, Korutla, and Nizamabad agricultural belt.
 We are currently operating under active EL NIÑO conditions (Oceanic Niño Index ONI = {oni_input:.2f}), which has caused supply crunches and rainfall deficits.
 Today's date is {today_str}.
@@ -624,51 +631,48 @@ CURRENTLY ACTIVE SELECTION IN DASHBOARD:
 - Trader/Dealer Bid: ₹{dealer_bid:,.0f} / qtl
 - Net Gain/Loss vs Jagtial: ₹{net_difference:,.0f}
 
-RULES FOR YOUR RESPONSE:
-1. If the farmer asks about ANY crop or dealer offer, match it against the calibrated floor (P10) and fair rate (P50).
-2. If dealer quotes below that crop's P10 floor, tell the farmer to REJECT the offer.
-3. If no buyer is willing to purchase at the farm gate ("nobody willing to buy our soybean"), advise them to take it to the regulated APMC yard (Jagtial or Nizamabad) where open public auctions run daily between 10:00 AM and 1:00 PM, or register under the Rythu Bandhu / Markfed procurement centers rather than panic selling to distress traders.
-4. Respond directly in the language/dialect of the prompt (Telugu, English, or Tanglish).
-5. Provide actionable advice (e.g., peak bidding hours, tarp drying).
+LANGUAGE & PRONUNCIATION INSTRUCTIONS FOR NATURAL SPEECH:
+1. When answering in Telugu, write in natural, spoken rural Telugu (తెలంగాణ మాండలికం శైలి).
+2. Avoid mixing random un-transliterated English words that break voice pronunciation. Write out prices clearly (e.g., 'క్వింటాలుకు ₹{p50:,.0f} రూపాయలు').
+3. Keep the advice concise (3-4 crisp sentences) so the audio voice playback reads smoothly and clearly for the farmer.
+4. If dealer quotes below P10, explicitly advise rejecting the deal and going to the regulated APMC auction (10:00 AM to 1:00 PM).
 """
 
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing mandi dynamics..."):
-                reply = None
-                last_error = None
+    with st.chat_message("assistant"):
+      with st.spinner("Analyzing mandi dynamics..."):
+        reply = None
+        last_error = None
 
-                # Dedicated retry loop for gemini-3.8-flash with backoff for transient 503s
-                for attempt in range(3):
-                    try:
-                        response = client.models.generate_content(
-                            model="gemini-3.8-flash",
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                system_instruction=system_instruction,
-                                temperature=0.2,
-                            ),
-                        )
-                        if response and response.text:
-                            reply = response.text
-                            break
-                    except Exception as e:
-                        last_error = e
-                        time.sleep(1.5 * (attempt + 1))
-                        continue
+        for attempt in range(3):
+          try:
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.2,
+                ),
+            )
+            if response and response.text:
+              reply = response.text
+              break
+          except Exception as e:
+            last_error = e
+            time.sleep(1.5 * (attempt + 1))
+            continue
 
-                if reply:
-                    st.markdown(reply)
-                    # Generate voice audio bytes
-                    audio_bytes = text_to_speech_audio(reply, lang_code=T["audio_lang"])
-                    if audio_bytes:
-                        st.audio(audio_bytes, format="audio/mp3")
+        if reply:
+          st.markdown(reply)
+          audio_bytes = text_to_speech_audio(reply, lang_code=T["audio_lang"])
+          if audio_bytes:
+            st.audio(audio_bytes, format="audio/mp3")
 
-                    st.session_state.chat_history.append(
-                        {"role": "assistant", "content": reply, "audio": audio_bytes}
-                    )
-                else:
-                    err_msg = f"AI Service Error: {last_error}"
-                    st.error(err_msg)
-                    st.session_state.chat_history.append(
-                        {"role": "assistant", "content": err_msg, "audio": None}
-                    )
+          st.session_state.chat_history.append(
+              {"role": "assistant", "content": reply, "audio": audio_bytes}
+          )
+        else:
+          err_msg = f"AI Service Error: {last_error}"
+          st.error(err_msg)
+          st.session_state.chat_history.append(
+              {"role": "assistant", "content": err_msg, "audio": None}
+          )
