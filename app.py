@@ -3,6 +3,7 @@ import concurrent.futures
 from datetime import datetime, timedelta
 import io
 import os
+import re
 import time
 import urllib.parse
 
@@ -22,8 +23,8 @@ st.set_page_config(
 )
 
 
-# Helper: Generate authentic neural speech via edge-tts in an isolated thread
-def text_to_speech_audio(text: str, lang_code: str = "te"):
+# Helper: Auto-detects Telugu Unicode and uses Mohan voice, otherwise Prabhat
+def text_to_speech_audio(text: str):
   try:
     clean_text = (
         text.replace("**", "")
@@ -36,7 +37,9 @@ def text_to_speech_audio(text: str, lang_code: str = "te"):
         .strip()
     )
 
-    voice = "te-IN-MohanNeural" if lang_code == "te" else "en-IN-PrabhatNeural"
+    # Detect if text contains Telugu Unicode script (\u0C00 - \u0C7F)
+    has_telugu = bool(re.search(r"[\u0c00-\u0c7f]", clean_text))
+    voice = "te-IN-MohanNeural" if has_telugu else "en-IN-PrabhatNeural"
 
     def _run_in_isolated_thread():
       loop = asyncio.new_event_loop()
@@ -58,7 +61,7 @@ def text_to_speech_audio(text: str, lang_code: str = "te"):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
       future = executor.submit(_run_in_isolated_thread)
-      return future.result(timeout=15)
+      return future.result(timeout=12)
   except Exception as e:
     print(f"[TTS Error]: {e}")
     return None
@@ -152,7 +155,6 @@ LANG = {
             " ivvocha?')"
         ),
         "chat_placeholder": "Ask your mandi query here...",
-        "audio_lang": "en",
     },
     "తెలుగు": {
         "title": "🌾 తెలంగాణ వ్యవసాయ మార్కెట్ ధర విశ్లేషణ వేదిక",
@@ -207,7 +209,6 @@ LANG = {
             " వద్దా?')"
         ),
         "chat_placeholder": "మీ సందేహాన్ని ఇక్కడ టైప్ చేయండి...",
-        "audio_lang": "te",
     },
 }
 
@@ -269,7 +270,6 @@ FEATURE_COLS = [
 ]
 
 
-# Compute in-memory baseline corridors for all crops
 @st.cache_data
 def compute_all_benchmarks(oni_val):
   benchmarks = {}
@@ -333,7 +333,6 @@ dealer_bid = st.sidebar.number_input(
     step=50.0,
 )
 
-# Metric Summary Cards
 m_col1, m_col2, m_col3, m_col4 = st.columns(4)
 m_col1.metric(T["floor_label"], f"₹{p10:,.0f} / qtl")
 yesterday_price = crop_data.iloc[-2]["modal_price"]
@@ -347,7 +346,6 @@ m_col4.metric(T["arrivals_label"], f"{int(latest_row['arrivals_qtl']):,} Qtls")
 
 st.markdown("---")
 
-# Visual Price Corridor Chart with Real-time Calendar Anchor
 st.subheader(f"{T['history_title']}: {selected_crop}")
 fig = go.Figure()
 
@@ -430,7 +428,6 @@ fig.update_layout(
 )
 st.plotly_chart(fig, width="stretch")
 
-# Intraday Hourly Auction Dynamics Table
 st.markdown("---")
 st.subheader(T["hourly_title"])
 
@@ -454,7 +451,6 @@ for h_label, mult, desc in hours:
 
 st.dataframe(pd.DataFrame(hourly_records), hide_index=True, width="stretch")
 
-# Advisory
 st.subheader(T["advisory_title"])
 if dealer_bid > 0:
   if dealer_bid >= p50:
@@ -478,7 +474,6 @@ if dealer_bid > 0:
 
 st.markdown("---")
 
-# Logistics & Arbitrage
 st.subheader(T["transport_calc_title"])
 nizamabad_price = p50 + (
     180 if selected_crop in ["Turmeric", "Soybean"] else -40
@@ -562,7 +557,6 @@ r_col3.metric(
 
 st.markdown("---")
 
-# WhatsApp Slip Section
 st.subheader(T["slip_title"])
 today_str = datetime.now().strftime("%d-%b-%Y")
 
@@ -611,7 +605,7 @@ st.link_button(
     width="stretch",
 )
 
-# AI Advisory Chatbot Section with Neural TTS Playback
+# AI Advisory Chatbot Section
 st.markdown("---")
 st.subheader(T["chat_title"])
 st.caption(T["chat_caption"])
@@ -658,34 +652,23 @@ if prompt := st.chat_input(T["chat_placeholder"]):
 
     system_instruction = f"""
 You are an expert Telangana Agricultural Mandi advisor stationed in the Jagtial, Korutla, and Nizamabad agricultural belt.
-We are currently operating under active EL NIÑO conditions (Oceanic Niño Index ONI = {oni_input:.2f}), which has caused supply crunches and rainfall deficits.
+Operating under active EL NIÑO conditions (ONI = {oni_input:.2f}).
 Today's date is {today_str}.
 
-CRITICAL INSTRUCTIONS ON PRICES:
-1. NEVER cite old government MSP numbers (such as old ₹4,892 or ₹2,200 MSPs) as current commercial market rates.
-2. In this El Niño season, market rates are significantly higher due to acute supply deficits.
-3. Use the computed model benchmarks below as GROUND TRUTH:
-
-CALIBRATED MARKET BENCHMARKS (ALL CROPS):
+GROUND TRUTH DATA:
 {benchmarks_summary}
 
-CURRENTLY ACTIVE SELECTION IN DASHBOARD:
-- Crop: {selected_crop}
+CURRENT CONTEXT:
+- Active Crop: {selected_crop}
 - Farmer Quantity: {produce_qty:.0f} Quintals
-- Moisture Level: {crop_moisture:.1f}% (Acceptable standard <= 17%)
-- Active Floor (P10): ₹{p10:,.0f} / qtl
-- Active Fair Price (P50): ₹{p50:,.0f} / qtl
-- Active Quality Ceiling (P90): ₹{p90:,.0f} / qtl
-- Nizamabad Mandi Benchmark: ₹{nizamabad_price:,.0f} / qtl
-- Warangal APMC Benchmark: ₹{warangal_price:,.0f} / qtl
-- Trader/Dealer Bid: ₹{dealer_bid:,.0f} / qtl
-- Net Gain/Loss vs Jagtial: ₹{net_difference:,.0f}
+- Moisture: {crop_moisture:.1f}%
+- Floor (P10): ₹{p10:,.0f} / qtl | Fair (P50): ₹{p50:,.0f} / qtl | Ceiling (P90): ₹{p90:,.0f} / qtl
+- Nizamabad Benchmark: ₹{nizamabad_price:,.0f} / qtl
 
-LANGUAGE & PRONUNCIATION INSTRUCTIONS FOR NATURAL SPEECH:
-1. When answering in Telugu, write in natural, spoken rural Telugu (తెలంగాణ మాండలికం శైలి).
-2. Avoid mixing random un-transliterated English words that break voice pronunciation. Write out prices clearly (e.g., 'క్వింటాలుకు ₹{p50:,.0f} రూపాయలు').
-3. Keep the advice concise (3-4 crisp sentences) so the audio voice playback reads smoothly and clearly for the farmer.
-4. If dealer quotes below P10, explicitly advise rejecting the deal and going to the regulated APMC auction (10:00 AM to 1:00 PM).
+STRICT LENGTH & VOICE SPEED INSTRUCTIONS:
+1. Provide a sharp, concise answer of EXACTLY 2 to 3 sentences maximum. Keep it direct and fast to read.
+2. In Telugu, use natural Telangana spoken cadence. Avoid mixed English vocabulary. State the numbers and advice clearly.
+3. If an offer is below P10, tell them to reject it immediately and attend the APMC public auction between 10:00 AM and 1:00 PM.
 """
 
     with st.chat_message("assistant"):
@@ -708,12 +691,13 @@ LANGUAGE & PRONUNCIATION INSTRUCTIONS FOR NATURAL SPEECH:
               break
           except Exception as e:
             last_error = e
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(1.0 * (attempt + 1))
             continue
 
         if reply:
           st.markdown(reply)
-          audio_bytes = text_to_speech_audio(reply, lang_code=T["audio_lang"])
+          # Auto-detects Telugu script vs English and selects Mohan vs Prabhat
+          audio_bytes = text_to_speech_audio(reply)
           if audio_bytes:
             st.audio(audio_bytes, format="audio/mp3")
 
