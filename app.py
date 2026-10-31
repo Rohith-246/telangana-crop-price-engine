@@ -89,13 +89,18 @@ LANG = {
         "moisture_label": "Harvest Moisture Level (%):",
         "quantity_label": "Produce Quantity (Quintals):",
         "dealer_bid_label": "Enter Private Dealer's Quoted Price (₹/qtl):",
+        "forecast_days_label": "Select Forecast Horizon (Days Ahead):",
         "floor_label": "Farmer Protection Floor (P10)",
         "fair_label": "Fair Equilibrium Price (P50)",
         "ceiling_label": "Buyer Quality Ceiling (P90)",
         "arrivals_label": "Mandi Daily Arrivals",
         "history_title": (
-            "30-Day Trend & Today's Real-Time Negotiation Corridor"
+            "30-Day Historical Trend & Today's Negotiation Corridor"
         ),
+        "forecast_chart_title": (
+            "🔮 Forward Price Estimation & Negotiation Trajectory"
+        ),
+        "forecast_table_title": "📅 Day-by-Day Forward Mandi Projections",
         "hourly_title": (
             "⏰ Intraday Hourly Auction Dynamics (Mandi Trading Hours)"
         ),
@@ -148,11 +153,16 @@ LANG = {
         "moisture_label": "దిగుబడి తేమ శాతం (%):",
         "quantity_label": "మీ వద్ద ఉన్న పంట పరిమాణం (క్వింటాళ్ళలో):",
         "dealer_bid_label": "వ్యాపారి ఆఫర్ చేసిన ధర (రూ./క్వింటాలు):",
+        "forecast_days_label": "భవిష్యత్ ధరల అంచనా రోజుల సంఖ్య (రోజులు):",
         "floor_label": "రైతు రక్షణ కనీస ధర (P10)",
         "fair_label": "సమతుల్య సరసమైన ధర (P50)",
         "ceiling_label": "గరిష్ట నాణ్యత గల ధర (P90)",
         "arrivals_label": "మార్కెట్ రాకలు (క్వింటాళ్ళు)",
         "history_title": "గత 30 రోజుల ట్రెండ్ మరియు నేటి బేరసారాల పరిధి",
+        "forecast_chart_title": (
+            "🔮 రాబోయే రోజుల ధరల అంచనా గ్రాఫ్ (భవిష్యత్ విశ్లేషణ)"
+        ),
+        "forecast_table_title": "📅 రోజువారీ భవిష్యత్ మార్కెట్ ధరల పట్టిక",
         "hourly_title": (
             "⏰ మార్కెట్ వేలం సమయాల వారీగా అంచనా ధరలు (గంటల వారీగా)"
         ),
@@ -225,6 +235,9 @@ oni_input = st.sidebar.slider(T["oni_label"], 0.0, 2.5, 1.45, 0.05)
 crop_moisture = st.sidebar.slider(T["moisture_label"], 10.0, 25.0, 14.0, 0.5)
 produce_qty = st.sidebar.number_input(
     T["quantity_label"], min_value=1.0, value=50.0, step=5.0
+)
+forecast_horizon = st.sidebar.slider(
+    T["forecast_days_label"], min_value=3, max_value=21, value=7, step=1
 )
 
 gemini_key_input = st.sidebar.text_input(
@@ -418,6 +431,160 @@ fig.update_layout(
     margin=dict(l=40, r=40, t=30, b=40),
 )
 st.plotly_chart(fig, width="stretch")
+
+# ----------------- MULTI-STEP FORWARD PRICE FORECASTING ENGINE -----------------
+st.markdown("---")
+st.subheader(f"{T['forecast_chart_title']} ({forecast_horizon} Days Ahead)")
+
+
+def generate_forward_forecast(base_crop_data, n_days, oni_val):
+  sim_history = base_crop_data.copy().to_dict(orient="records")
+  forecast_dates = []
+  forecast_p10 = []
+  forecast_p50 = []
+  forecast_p90 = []
+
+  # Anchor at today
+  forecast_dates.append(today_date)
+  forecast_p10.append(round(p10))
+  forecast_p50.append(round(p50))
+  forecast_p90.append(round(p90))
+
+  for step in range(1, n_days + 1):
+    step_date = today_date + timedelta(days=step)
+    prices_so_far = [r["modal_price"] for r in sim_history]
+    arrivals_so_far = [r["arrivals_qtl"] for r in sim_history]
+
+    # Dynamically build lagged autoregressive feature vector
+    p_lag1 = prices_so_far[-1]
+    p_lag2 = prices_so_far[-2] if len(prices_so_far) >= 2 else p_lag1
+    p_lag7 = prices_so_far[-7] if len(prices_so_far) >= 7 else prices_so_far[0]
+    p_lag14 = (
+        prices_so_far[-14] if len(prices_so_far) >= 14 else prices_so_far[0]
+    )
+
+    arr_lag1 = arrivals_so_far[-1]
+    arr_lag7 = (
+        arrivals_so_far[-7] if len(arrivals_so_far) >= 7 else arrivals_so_far[0]
+    )
+
+    roll_7 = prices_so_far[-7:]
+    roll_mean = float(np.mean(roll_7))
+    roll_std = float(np.std(roll_7)) if len(roll_7) > 1 else 10.0
+    mom_7d = p_lag1 - p_lag7
+    el_nino_stress = oni_val / (arr_lag1 + 1e-4)
+
+    row = {
+        "arrivals_qtl": arr_lag1,
+        "oni_index": oni_val,
+        "rain_deficit_pct": float(sim_history[-1].get("rain_deficit_pct", 18.0)),
+        "month_sin": np.sin(2 * np.pi * step_date.month / 12),
+        "month_cos": np.cos(2 * np.pi * step_date.month / 12),
+        "day_of_week": step_date.weekday(),
+        "price_lag_1": p_lag1,
+        "price_lag_2": p_lag2,
+        "price_lag_7": p_lag7,
+        "price_lag_14": p_lag14,
+        "arrival_lag_1": arr_lag1,
+        "arrival_lag_7": arr_lag7,
+        "price_rolling_7d_mean": roll_mean,
+        "price_rolling_7d_std": roll_std,
+        "price_momentum_7d": mom_7d,
+        "el_nino_arrival_stress": el_nino_stress,
+    }
+
+    x_step = pd.DataFrame([row])[FEATURE_COLS]
+    f_p10 = float(models["p10"].predict(x_step)[0])
+    f_p50 = float(models["p50"].predict(x_step)[0])
+    f_p90 = float(models["p90"].predict(x_step)[0])
+
+    # Enforce non-crossing quantile bounds
+    f_p10 = min(f_p10, f_p50)
+    f_p90 = max(f_p90, f_p50)
+
+    # Append to forward vectors
+    forecast_dates.append(step_date)
+    forecast_p10.append(round(f_p10))
+    forecast_p50.append(round(f_p50))
+    forecast_p90.append(round(f_p90))
+
+    # Feed recursive step back into simulation memory
+    sim_row = row.copy()
+    sim_row["modal_price"] = f_p50
+    sim_row["date"] = step_date
+    sim_history.append(sim_row)
+
+  return pd.DataFrame({
+      "Date": forecast_dates,
+      "P10_Floor": forecast_p10,
+      "P50_Fair": forecast_p50,
+      "P90_Ceiling": forecast_p90,
+  })
+
+
+forecast_df = generate_forward_forecast(
+    crop_data, forecast_horizon, oni_input
+)
+
+fig_forecast = go.Figure()
+
+# Shaded confidence band between P10 and P90
+fig_forecast.add_trace(
+    go.Scatter(
+        x=forecast_df["Date"],
+        y=forecast_df["P90_Ceiling"],
+        mode="lines",
+        line=dict(color="#8b5cf6", width=1.5, dash="dash"),
+        name="P90 Quality Ceiling",
+    )
+)
+
+fig_forecast.add_trace(
+    go.Scatter(
+        x=forecast_df["Date"],
+        y=forecast_df["P10_Floor"],
+        mode="lines",
+        line=dict(color="#ef4444", width=1.5, dash="dash"),
+        fill="tonexty",
+        fillcolor="rgba(139, 92, 246, 0.12)",
+        name="P10 Farmer Floor",
+    )
+)
+
+fig_forecast.add_trace(
+    go.Scatter(
+        x=forecast_df["Date"],
+        y=forecast_df["P50_Fair"],
+        mode="lines+markers",
+        line=dict(color="#3b82f6", width=3),
+        marker=dict(size=6),
+        name="Projected P50 Fair Price",
+    )
+)
+
+fig_forecast.update_layout(
+    yaxis_title=T["per_qtl"],
+    xaxis_title="Forecast Date",
+    template="plotly_dark",
+    margin=dict(l=40, r=40, t=30, b=40),
+    hovermode="x unified",
+)
+st.plotly_chart(fig_forecast, width="stretch")
+
+# Tabular breakdown of the multi-step forward projection
+with st.expander(f"{T['forecast_table_title']} ({forecast_horizon} Days)", expanded=False):
+  display_table = forecast_df.copy()
+  display_table["Date"] = display_table["Date"].dt.strftime("%d %b %Y (%a)")
+  display_table["P10_Floor"] = display_table["P10_Floor"].apply(lambda v: f"₹{v:,.0f}")
+  display_table["P50_Fair"] = display_table["P50_Fair"].apply(lambda v: f"₹{v:,.0f}")
+  display_table["P90_Ceiling"] = display_table["P90_Ceiling"].apply(lambda v: f"₹{v:,.0f}")
+  display_table.columns = [
+      "Date",
+      "Floor Price (P10)",
+      "Fair Projected Price (P50)",
+      "Ceiling Price (P90)",
+  ]
+  st.dataframe(display_table, hide_index=True, width="stretch")
 
 # Intraday Hourly Auction Dynamics Table
 st.markdown("---")
@@ -646,6 +813,10 @@ if prompt := st.chat_input(T["chat_placeholder"]):
         for c, vals in all_benchmarks_dict.items()
     ])
 
+    # End-of-horizon projected fair price
+    horizon_p50 = forecast_df.iloc[-1]["P50_Fair"]
+    horizon_date_str = forecast_df.iloc[-1]["Date"].strftime("%d-%b-%Y")
+
     system_instruction = f"""
 You are an expert Telangana Agricultural Mandi advisor stationed in the Jagtial, Korutla, and Nizamabad agricultural belt.
 We are currently operating under active EL NIÑO conditions (Oceanic Niño Index ONI = {oni_input:.2f}), which has caused supply crunches and rainfall deficits.
@@ -666,13 +837,14 @@ CURRENTLY ACTIVE SELECTION IN DASHBOARD:
 - Active Floor (P10): ₹{p10:,.0f} / qtl
 - Active Fair Price (P50): ₹{p50:,.0f} / qtl
 - Active Quality Ceiling (P90): ₹{p90:,.0f} / qtl
+- Forward Forecast Horizon: {forecast_horizon} Days Ahead (by {horizon_date_str}, Fair P50 projected at ₹{horizon_p50:,.0f}/qtl)
 - Nizamabad Mandi Benchmark: ₹{nizamabad_price:,.0f} / qtl
 - Warangal APMC Benchmark: ₹{warangal_price:,.0f} / qtl
 - Trader/Dealer Bid: ₹{dealer_bid:,.0f} / qtl
 - Net Gain/Loss vs Jagtial: ₹{net_difference:,.0f}
 
 RULES FOR YOUR RESPONSE:
-1. If the farmer asks about ANY crop or dealer offer, match it against the calibrated floor (P10) and fair rate (P50).
+1. If the farmer asks whether to sell today or hold, factor in both today's rate (₹{p50:,.0f}) and the {forecast_horizon}-day projected forward trajectory (₹{horizon_p50:,.0f} by {horizon_date_str}).
 2. If dealer quotes below that crop's P10 floor, tell the farmer to REJECT the offer.
 3. If no buyer is willing to purchase at the farm gate ("nobody willing to buy our soybean"), advise them to take it to the regulated APMC yard (Jagtial or Nizamabad) where open public auctions run daily between 10:00 AM and 1:00 PM, or register under the Rythu Bandhu / Markfed procurement centers rather than panic selling to distress traders.
 4. Respond directly in the language/dialect of the prompt (Telugu, English, or Tanglish).
