@@ -576,7 +576,7 @@ st.link_button(
     width="stretch",
 )
 
-# AI Advisory Chatbot Section with Automatic Multi-Model Fallback (Handles 503 Spikes)
+# AI Advisory Chatbot Section with Exposed Diagnostic Errors
 st.markdown("---")
 st.subheader(T["chat_title"])
 st.caption(T["chat_caption"])
@@ -656,7 +656,7 @@ RULES FOR YOUR RESPONSE:
     with st.chat_message("assistant"):
       with st.spinner("Analyzing mandi dynamics..."):
         reply = None
-        # Fallback list to bypass transient 503 capacity spikes
+        error_details = []
         models_to_try = [
             "gemini-3.8-flash",
             "gemini-2.5-flash",
@@ -675,17 +675,18 @@ RULES FOR YOUR RESPONSE:
             if response and response.text:
               reply = response.text
               break
-          except Exception:
+          except Exception as e:
+            error_details.append(f"{candidate}: {e}")
             continue
 
         if reply:
           st.markdown(reply)
           st.session_state.chat_history.append(
-            {"role": "assistant", "content": reply}
+              {"role": "assistant", "content": reply}
           )
         else:
-          err_msg = (
-              "The AI service is experiencing high traffic across endpoints"
-              " (503). Please retry your question in a moment."
+          err_msg = f"AI Service Error: {error_details[-1] if error_details else 'No response from API'}"
+          st.error(err_msg)
+          st.session_state.chat_history.append(
+              {"role": "assistant", "content": err_msg}
           )
-          st.warning(err_msg)
