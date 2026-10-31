@@ -1,4 +1,5 @@
 import os
+import time
 import urllib.parse
 from datetime import datetime, timedelta
 
@@ -576,7 +577,7 @@ st.link_button(
     width="stretch",
 )
 
-# AI Advisory Chatbot Section with Exposed Diagnostic Errors
+# AI Advisory Chatbot Section with Dedicated Retry Backoff on gemini-3.8-flash
 st.markdown("---")
 st.subheader(T["chat_title"])
 st.caption(T["chat_caption"])
@@ -656,17 +657,13 @@ RULES FOR YOUR RESPONSE:
     with st.chat_message("assistant"):
       with st.spinner("Analyzing mandi dynamics..."):
         reply = None
-        error_details = []
-        models_to_try = [
-            "gemini-3.8-flash",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-        ]
+        last_error = None
 
-        for candidate in models_to_try:
+        # Dedicated retry loop for gemini-3.8-flash with backoff for transient 503s
+        for attempt in range(3):
           try:
             response = client.models.generate_content(
-                model=candidate,
+                model="gemini-3.8-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction, temperature=0.2
@@ -676,7 +673,8 @@ RULES FOR YOUR RESPONSE:
               reply = response.text
               break
           except Exception as e:
-            error_details.append(f"{candidate}: {e}")
+            last_error = e
+            time.sleep(1.5 * (attempt + 1))
             continue
 
         if reply:
@@ -685,7 +683,7 @@ RULES FOR YOUR RESPONSE:
               {"role": "assistant", "content": reply}
           )
         else:
-          err_msg = f"AI Service Error: {error_details[-1] if error_details else 'No response from API'}"
+          err_msg = f"AI Service Error: {last_error}"
           st.error(err_msg)
           st.session_state.chat_history.append(
               {"role": "assistant", "content": err_msg}
