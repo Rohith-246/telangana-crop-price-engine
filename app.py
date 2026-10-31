@@ -24,14 +24,12 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    /* Global Styles */
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
     html, body, [class*="css"] {
         font-family: 'Plus Jakarta Sans', sans-serif;
     }
 
-    /* Header container */
     .hero-header {
         background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(59, 130, 246, 0.08) 100%);
         border: 1px solid rgba(255, 255, 255, 0.08);
@@ -54,7 +52,6 @@ st.markdown(
         gap: 6px;
     }
 
-    /* Card Container */
     .metric-card {
         background: rgba(255, 255, 255, 0.03);
         border: 1px solid rgba(255, 255, 255, 0.07);
@@ -86,7 +83,6 @@ st.markdown(
         color: #10b981;
     }
 
-    /* Tabs Styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -99,7 +95,6 @@ st.markdown(
         font-size: 0.92rem;
     }
 
-    /* Sticky footer / action buttons */
     .stButton>button {
         border-radius: 8px;
         font-weight: 600;
@@ -170,7 +165,7 @@ def load_and_sync_data():
 
 df = load_and_sync_data()
 
-# Bilingual Dictionary
+# Bilingual Dictionary with 'chat_title' restored
 LANG = {
     "English": {
         "title": "Telangana Agricultural Pricing & Mandi Intelligence",
@@ -193,6 +188,7 @@ LANG = {
         "tab_overview": "📈 Market Intelligence & Corridor",
         "tab_arbitrage": "🚚 Regional Logistics & Take-Home",
         "tab_chat": "💬 Rythu Sahayata AI Advisory",
+        "chat_title": "💬 Rythu Sahayata AI Chatbot (Farmer Advisory)",
         "history_title": "Mandi Negotiation Corridor & Historical Modal Trend",
         "forecast_chart_title": (
             "Multi-Step Autoregressive Price Trajectory Projection"
@@ -255,6 +251,7 @@ LANG = {
         "tab_overview": "📈 మార్కెట్ ధరలు & భవిష్యత్ అంచనాలు",
         "tab_arbitrage": "🚚 రవాణా ఖర్చులు & మార్కెట్ల పోలిక",
         "tab_chat": "💬 రైతు సహాయత AI సలహాదారు",
+        "chat_title": "💬 రైతు సహాయత AI చాట్‌బాట్ (మార్కెట్ సలహాదారు)",
         "history_title": "గత 30 రోజుల ట్రెండ్ మరియు నేటి బేరసారాల పరిధి",
         "forecast_chart_title": "రాబోయే రోజుల ధరల భవిష్యత్ అంచనా గ్రాఫ్",
         "forecast_table_title": "రోజువారీ భవిష్యత్ మార్కెట్ ధరల పట్టిక",
@@ -315,7 +312,7 @@ with st.sidebar:
         "Tomato",
         "Brinjal",
     ]
-    selected_crop = st.selectbox(T["crop_label"], crop_list)
+    selected_crop = st.sidebar.selectbox(T["crop_label"], crop_list)
 
     c_side1, c_side2 = st.columns(2)
     with c_side1:
