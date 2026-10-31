@@ -1,15 +1,12 @@
-import asyncio
-import concurrent.futures
-from datetime import datetime, timedelta
 import io
 import os
-import re
 import time
 import urllib.parse
+from datetime import datetime, timedelta
 
-import edge_tts
 from google import genai
 from google.genai import types
+from gtts import gTTS
 import joblib
 import numpy as np
 import pandas as pd
@@ -23,47 +20,22 @@ st.set_page_config(
 )
 
 
-# Helper: Auto-detects Telugu Unicode and uses Mohan voice, otherwise Prabhat
-def text_to_speech_audio(text: str):
+# Helper: Generate audio bytes for Telugu or English
+def text_to_speech_audio(text: str, lang_code: str = "te"):
   try:
     clean_text = (
         text.replace("**", "")
         .replace("*", "")
         .replace("#", "")
         .replace("`", "")
-        .replace("₹", " రూపాయలు ")
-        .replace("/qtl", " క్వింటాలుకి ")
-        .replace("/-", " రూపాయలు ")
         .strip()
     )
-
-    # Detect if text contains Telugu Unicode script (\u0C00 - \u0C7F)
-    has_telugu = bool(re.search(r"[\u0c00-\u0c7f]", clean_text))
-    voice = "te-IN-MohanNeural" if has_telugu else "en-IN-PrabhatNeural"
-
-    def _run_in_isolated_thread():
-      loop = asyncio.new_event_loop()
-      asyncio.set_event_loop(loop)
-      try:
-        communicate = edge_tts.Communicate(clean_text, voice)
-        audio_data = b""
-
-        async def _consume():
-          nonlocal audio_data
-          async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-              audio_data += chunk["data"]
-
-        loop.run_until_complete(_consume())
-        return audio_data
-      finally:
-        loop.close()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-      future = executor.submit(_run_in_isolated_thread)
-      return future.result(timeout=12)
-  except Exception as e:
-    print(f"[TTS Error]: {e}")
+    tts = gTTS(text=clean_text, lang=lang_code, slow=False)
+    audio_buffer = io.BytesIO()
+    tts.write_to_fp(audio_buffer)
+    audio_buffer.seek(0)
+    return audio_buffer.read()
+  except Exception:
     return None
 
 
@@ -109,7 +81,8 @@ LANG = {
         "title": "🌾 Telangana Agricultural Price Intelligence Engine",
         "subtitle": (
             "**Location:** Jagtial, Korutla & Nizamabad Mandi Belt | **Market"
-            f" Date:** {datetime.now().strftime('%d %B %Y')} (Live Synchronized)"
+            f" Date:** {datetime.now().strftime('%d %B %Y')} (Live"
+            " Synchronized)"
         ),
         "crop_label": "Select Crop:",
         "oni_label": "Current ONI Index (El Niño Severity):",
@@ -120,8 +93,12 @@ LANG = {
         "fair_label": "Fair Equilibrium Price (P50)",
         "ceiling_label": "Buyer Quality Ceiling (P90)",
         "arrivals_label": "Mandi Daily Arrivals",
-        "history_title": "30-Day Trend & Today's Real-Time Negotiation Corridor",
-        "hourly_title": "⏰ Intraday Hourly Auction Dynamics (Mandi Trading Hours)",
+        "history_title": (
+            "30-Day Trend & Today's Real-Time Negotiation Corridor"
+        ),
+        "hourly_title": (
+            "⏰ Intraday Hourly Auction Dynamics (Mandi Trading Hours)"
+        ),
         "advisory_title": "💡 Negotiation & Dealer Bid Analysis",
         "bid_good": (
             "✅ **Fair Deal:** Dealer's bid is above the fair equilibrium"
@@ -142,7 +119,9 @@ LANG = {
             "🚚 Transport & Net Take-Home Realization Calculator"
         ),
         "vs_yesterday": "vs yesterday",
-        "penalty_warning": "Moisture deduction applied: -₹{penalty:.0f}/quintal",
+        "penalty_warning": (
+            "Moisture deduction applied: -₹{penalty:.0f}/quintal"
+        ),
         "per_qtl": "₹ / Quintal",
         "slip_title": "📱 Official Mandi Negotiation Slip (WhatsApp / SMS)",
         "vehicle_type": "Select Transport Vehicle:",
@@ -155,12 +134,14 @@ LANG = {
             " ivvocha?')"
         ),
         "chat_placeholder": "Ask your mandi query here...",
+        "audio_lang": "en",
     },
     "తెలుగు": {
         "title": "🌾 తెలంగాణ వ్యవసాయ మార్కెట్ ధర విశ్లేషణ వేదిక",
         "subtitle": (
             "**ప్రాంతం:** జగిత్యాల, కోరుట్ల, నిజామాబాద్ మార్కెట్ యార్డ్స్ |"
-            f" **తేదీ:** {datetime.now().strftime('%d %B %Y')} (లైవ్ అప్‌డేట్)"
+            f" **తేదీ:** {datetime.now().strftime('%d %B %Y')} (లైవ్"
+            " అప్‌డేట్)"
         ),
         "crop_label": "పంటను ఎంచుకోండి:",
         "oni_label": "ఎల్ నినో తీవ్రత సూచిక (ONI Index):",
@@ -189,7 +170,9 @@ LANG = {
             " ₹{diff:,.0f}/క్వింటాలు తక్కువ ఇస్తున్నాడు! మొత్తం కోల్పోతున్న మొత్తం:"
             " **₹{total_loss:,.0f}** ({qty} క్వింటాళ్ళు)."
         ),
-        "arbitrage_title": "📊 సమీప మార్కెట్లలో ధరల వ్యత్యాసం (ఆర్బిట్రేజ్)",
+        "arbitrage_title": (
+            "📊 సమీప మార్కెట్లలో ధరల వ్యత్యాసం (ఆర్బిట్రేజ్)"
+        ),
         "transport_calc_title": (
             "🚚 రవాణా ఖర్చులు పోను నికర లాభం (Net Profit) కాలిక్యులేటర్"
         ),
@@ -198,17 +181,22 @@ LANG = {
             "తేమ శాతం ఎక్కువ ఉన్నందుకు తగ్గింపు: -₹{penalty:.0f}/క్వింటాలు"
         ),
         "per_qtl": "రూ. / క్వింటాలు",
-        "slip_title": "📱 అధికారిక మార్కెట్ రసీదు స్లిప్ (వాట్సాప్ / ఎస్ఎంఎస్)",
+        "slip_title": (
+            "📱 అధికారిక మార్కెట్ రసీదు స్లిప్ (వాట్సాప్ / ఎస్ఎంఎస్)"
+        ),
         "vehicle_type": "రవాణా వాహనాన్ని ఎంచుకోండి:",
         "destination_mandi": "లక్ష్య మార్కెట్ యార్డ్:",
         "copy_slip": "📋 రసీదును కాపీ చేయండి",
         "whatsapp_button": "📲 వాట్సాప్‌లో పంపండి",
-        "chat_title": "💬 రైతు సహాయత AI చాట్‌బాట్ (మార్కెట్ సలహాదారు)",
+        "chat_title": (
+            "💬 రైతు సహాయత AI చాట్‌బాట్ (మార్కెట్ సలహాదారు)"
+        ),
         "chat_caption": (
             "తెలుగు లేదా ఇంగ్లీషులో అడగండి (ఉదా: 'వ్యాపారి 6600 ఇస్తానంటే అమ్మాలా"
             " వద్దా?')"
         ),
         "chat_placeholder": "మీ సందేహాన్ని ఇక్కడ టైప్ చేయండి...",
+        "audio_lang": "te",
     },
 }
 
@@ -270,6 +258,7 @@ FEATURE_COLS = [
 ]
 
 
+# Compute in-memory baseline corridors for all crops
 @st.cache_data
 def compute_all_benchmarks(oni_val):
   benchmarks = {}
@@ -333,6 +322,7 @@ dealer_bid = st.sidebar.number_input(
     step=50.0,
 )
 
+# Metric Summary Cards
 m_col1, m_col2, m_col3, m_col4 = st.columns(4)
 m_col1.metric(T["floor_label"], f"₹{p10:,.0f} / qtl")
 yesterday_price = crop_data.iloc[-2]["modal_price"]
@@ -346,6 +336,7 @@ m_col4.metric(T["arrivals_label"], f"{int(latest_row['arrivals_qtl']):,} Qtls")
 
 st.markdown("---")
 
+# Visual Price Corridor Chart with Real-time Calendar Anchor
 st.subheader(f"{T['history_title']}: {selected_crop}")
 fig = go.Figure()
 
@@ -428,6 +419,7 @@ fig.update_layout(
 )
 st.plotly_chart(fig, width="stretch")
 
+# Intraday Hourly Auction Dynamics Table
 st.markdown("---")
 st.subheader(T["hourly_title"])
 
@@ -451,6 +443,7 @@ for h_label, mult, desc in hours:
 
 st.dataframe(pd.DataFrame(hourly_records), hide_index=True, width="stretch")
 
+# Advisory
 st.subheader(T["advisory_title"])
 if dealer_bid > 0:
   if dealer_bid >= p50:
@@ -474,6 +467,7 @@ if dealer_bid > 0:
 
 st.markdown("---")
 
+# Logistics & Arbitrage
 st.subheader(T["transport_calc_title"])
 nizamabad_price = p50 + (
     180 if selected_crop in ["Turmeric", "Soybean"] else -40
@@ -557,6 +551,7 @@ r_col3.metric(
 
 st.markdown("---")
 
+# WhatsApp Slip Section
 st.subheader(T["slip_title"])
 today_str = datetime.now().strftime("%d-%b-%Y")
 
@@ -605,11 +600,12 @@ st.link_button(
     width="stretch",
 )
 
-# AI Advisory Chatbot Section with Real-Time Word Streaming & Fast TTS
+# AI Advisory Chatbot Section with Resilient Dual-Model Routing
 st.markdown("---")
 st.subheader(T["chat_title"])
 st.caption(T["chat_caption"])
 
+# Reads from Streamlit Cloud Secrets, OS environment, or manual sidebar input
 active_api_key = (
     os.environ.get("GEMINI_API_KEY")
     or (st.secrets.get("GEMINI_API_KEY") if hasattr(st, "secrets") else None)
@@ -619,7 +615,7 @@ active_api_key = (
 if "chat_history" not in st.session_state:
   st.session_state.chat_history = []
 
-for msg in st.session_state.chat_history:
+for idx, msg in enumerate(st.session_state.chat_history):
   with st.chat_message(msg["role"]):
     st.markdown(msg["content"])
     if msg["role"] == "assistant" and msg.get("audio"):
@@ -639,7 +635,7 @@ if prompt := st.chat_input(T["chat_placeholder"]):
       )
       st.warning(warning_msg)
       st.session_state.chat_history.append(
-          {"role": "assistant", "content": warning_msg}
+          {"role": "assistant", "content": warning_msg, "audio": None}
       )
   else:
     client = genai.Client(api_key=active_api_key)
@@ -652,64 +648,76 @@ if prompt := st.chat_input(T["chat_placeholder"]):
 
     system_instruction = f"""
 You are an expert Telangana Agricultural Mandi advisor stationed in the Jagtial, Korutla, and Nizamabad agricultural belt.
-Operating under active EL NIÑO conditions (ONI = {oni_input:.2f}).
+We are currently operating under active EL NIÑO conditions (Oceanic Niño Index ONI = {oni_input:.2f}), which has caused supply crunches and rainfall deficits.
 Today's date is {today_str}.
 
-GROUND TRUTH DATA:
+CRITICAL INSTRUCTIONS ON PRICES:
+1. NEVER cite old government MSP numbers (such as old ₹4,892 or ₹2,200 MSPs) as current commercial market rates.
+2. In this El Niño season, market rates are significantly higher due to acute supply deficits.
+3. Use the computed model benchmarks below as GROUND TRUTH:
+
+CALIBRATED MARKET BENCHMARKS (ALL CROPS):
 {benchmarks_summary}
 
-CURRENT CONTEXT:
-- Active Crop: {selected_crop}
+CURRENTLY ACTIVE SELECTION IN DASHBOARD:
+- Crop: {selected_crop}
 - Farmer Quantity: {produce_qty:.0f} Quintals
-- Moisture: {crop_moisture:.1f}%
-- Floor (P10): ₹{p10:,.0f} / qtl | Fair (P50): ₹{p50:,.0f} / qtl | Ceiling (P90): ₹{p90:,.0f} / qtl
-- Nizamabad Benchmark: ₹{nizamabad_price:,.0f} / qtl
+- Moisture Level: {crop_moisture:.1f}% (Acceptable standard <= 17%)
+- Active Floor (P10): ₹{p10:,.0f} / qtl
+- Active Fair Price (P50): ₹{p50:,.0f} / qtl
+- Active Quality Ceiling (P90): ₹{p90:,.0f} / qtl
+- Nizamabad Mandi Benchmark: ₹{nizamabad_price:,.0f} / qtl
+- Warangal APMC Benchmark: ₹{warangal_price:,.0f} / qtl
+- Trader/Dealer Bid: ₹{dealer_bid:,.0f} / qtl
+- Net Gain/Loss vs Jagtial: ₹{net_difference:,.0f}
 
-STRICT INSTRUCTIONS FOR FAST GENERATION AND NATURAL SPEECH:
-1. Provide a direct, actionable answer in EXACTLY 2 to 3 sentences. No bullet points or long introductions.
-2. In Telugu, respond exclusively in spoken rural Telangana Telugu without mixing English script words. Spell numbers out clearly.
-3. If the dealer offer is below the P10 floor, instruct the farmer to reject the offer immediately and bring the produce to the regulated APMC auction (10:00 AM to 1:00 PM).
+RULES FOR YOUR RESPONSE:
+1. If the farmer asks about ANY crop or dealer offer, match it against the calibrated floor (P10) and fair rate (P50).
+2. If dealer quotes below that crop's P10 floor, tell the farmer to REJECT the offer.
+3. If no buyer is willing to purchase at the farm gate ("nobody willing to buy our soybean"), advise them to take it to the regulated APMC yard (Jagtial or Nizamabad) where open public auctions run daily between 10:00 AM and 1:00 PM, or register under the Rythu Bandhu / Markfed procurement centers rather than panic selling to distress traders.
+4. Respond directly in the language/dialect of the prompt (Telugu, English, or Tanglish).
+5. Provide actionable advice (e.g., peak bidding hours, tarp drying).
 """
 
     with st.chat_message("assistant"):
-      message_placeholder = st.empty()
-      full_reply = ""
-      last_error = None
+      with st.spinner("Analyzing mandi dynamics..."):
+        reply = None
+        last_error = None
 
-      # Fast real-time token streaming
-      for attempt in range(2):
-        try:
-          stream_response = client.models.generate_content_stream(
-              model="gemini-3.8-flash",
-              contents=prompt,
-              config=types.GenerateContentConfig(
-                  system_instruction=system_instruction,
-                  temperature=0.2,
-              ),
+        # Prioritize high-quota stable models, fallback to 3.8 preview if needed
+        model_candidates = ["gemini-2.5-flash", "gemini-3.8-flash"]
+
+        for model_name in model_candidates:
+          for attempt in range(2):
+            try:
+              response = client.models.generate_content(
+                  model=model_name,
+                  contents=prompt,
+                  config=types.GenerateContentConfig(
+                      system_instruction=system_instruction, temperature=0.2
+                  ),
+              )
+              if response and response.text:
+                reply = response.text
+                break
+            except Exception as e:
+              last_error = e
+              time.sleep(2.0 * (attempt + 1))
+          if reply:
+            break
+
+        if reply:
+          st.markdown(reply)
+          audio_bytes = text_to_speech_audio(reply, lang_code=T["audio_lang"])
+          if audio_bytes:
+            st.audio(audio_bytes, format="audio/mp3")
+
+          st.session_state.chat_history.append(
+              {"role": "assistant", "content": reply, "audio": audio_bytes}
           )
-          for chunk in stream_response:
-            if chunk.text:
-              full_reply += chunk.text
-              message_placeholder.markdown(full_reply + "▌")
-          message_placeholder.markdown(full_reply)
-          break
-        except Exception as e:
-          last_error = e
-          time.sleep(1.0)
-          continue
-
-      if full_reply:
-        # Generate neural audio after text is already visible on screen
-        audio_bytes = text_to_speech_audio(full_reply)
-        if audio_bytes:
-          st.audio(audio_bytes, format="audio/mp3")
-
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": full_reply, "audio": audio_bytes}
-        )
-      else:
-        err_msg = f"AI Service Error: {last_error}"
-        st.error(err_msg)
-        st.session_state.chat_history.append(
-            {"role": "assistant", "content": err_msg, "audio": None}
-        )
+        else:
+          err_msg = f"AI Service Error: {last_error}"
+          st.error(err_msg)
+          st.session_state.chat_history.append(
+              {"role": "assistant", "content": err_msg, "audio": None}
+          )
