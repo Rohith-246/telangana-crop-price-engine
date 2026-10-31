@@ -1,9 +1,10 @@
 import asyncio
+import concurrent.futures
+from datetime import datetime, timedelta
 import io
 import os
 import time
 import urllib.parse
-from datetime import datetime, timedelta
 
 import edge_tts
 from google import genai
@@ -21,33 +22,45 @@ st.set_page_config(
 )
 
 
-# Helper: Generate authentic neural speech via edge-tts (Mohan for Telugu, Prabhat for Indian English)
+# Helper: Generate authentic neural speech via edge-tts in an isolated thread
 def text_to_speech_audio(text: str, lang_code: str = "te"):
   try:
-    # Clean markdown and currency symbols for smooth phonetic pronunciation
     clean_text = (
         text.replace("**", "")
         .replace("*", "")
         .replace("#", "")
         .replace("`", "")
         .replace("₹", " రూపాయలు ")
-        .replace("/qtl", " ప్రతి క్వింటాలు ")
-        .replace("/-", " రూపాయలు")
+        .replace("/qtl", " క్వింటాలుకి ")
+        .replace("/-", " రూపాయలు ")
         .strip()
     )
 
     voice = "te-IN-MohanNeural" if lang_code == "te" else "en-IN-PrabhatNeural"
 
-    async def _generate():
-      communicate = edge_tts.Communicate(clean_text, voice)
-      audio_data = b""
-      async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-          audio_data += chunk["data"]
-      return audio_data
+    def _run_in_isolated_thread():
+      loop = asyncio.new_event_loop()
+      asyncio.set_event_loop(loop)
+      try:
+        communicate = edge_tts.Communicate(clean_text, voice)
+        audio_data = b""
 
-    return asyncio.run(_generate())
-  except Exception:
+        async def _consume():
+          nonlocal audio_data
+          async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+              audio_data += chunk["data"]
+
+        loop.run_until_complete(_consume())
+        return audio_data
+      finally:
+        loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+      future = executor.submit(_run_in_isolated_thread)
+      return future.result(timeout=15)
+  except Exception as e:
+    print(f"[TTS Error]: {e}")
     return None
 
 
@@ -107,11 +120,24 @@ LANG = {
         "history_title": "30-Day Trend & Today's Real-Time Negotiation Corridor",
         "hourly_title": "⏰ Intraday Hourly Auction Dynamics (Mandi Trading Hours)",
         "advisory_title": "💡 Negotiation & Dealer Bid Analysis",
-        "bid_good": "✅ **Fair Deal:** Dealer's bid is above the fair equilibrium price. You can accept safely.",
-        "bid_warning": "⚠️ **Underpaying Alert:** Dealer's quote is below fair price by ₹{diff:,.0f}/qtl. Total potential loss: **₹{total_loss:,.0f}** on your {qty} qtls.",
-        "bid_danger": "🚨 **Severe Distress Cut:** Dealer is quoting ₹{diff:,.0f}/qtl BELOW the protection floor! Total margin surrendered: **₹{total_loss:,.0f}** on your {qty} qtls.",
+        "bid_good": (
+            "✅ **Fair Deal:** Dealer's bid is above the fair equilibrium"
+            " price. You can accept safely."
+        ),
+        "bid_warning": (
+            "⚠️ **Underpaying Alert:** Dealer's quote is below fair price by"
+            " ₹{diff:,.0f}/qtl. Total potential loss: **₹{total_loss:,.0f}** on"
+            " your {qty} qtls."
+        ),
+        "bid_danger": (
+            "🚨 **Severe Distress Cut:** Dealer is quoting ₹{diff:,.0f}/qtl"
+            " BELOW the protection floor! Total margin surrendered:"
+            " **₹{total_loss:,.0f}** on your {qty} qtls."
+        ),
         "arbitrage_title": "📊 Regional Mandi Arbitrage Comparison",
-        "transport_calc_title": "🚚 Transport & Net Take-Home Realization Calculator",
+        "transport_calc_title": (
+            "🚚 Transport & Net Take-Home Realization Calculator"
+        ),
         "vs_yesterday": "vs yesterday",
         "penalty_warning": "Moisture deduction applied: -₹{penalty:.0f}/quintal",
         "per_qtl": "₹ / Quintal",
@@ -121,7 +147,10 @@ LANG = {
         "copy_slip": "📋 Copy Negotiation Slip Text",
         "whatsapp_button": "📲 Share Directly to WhatsApp",
         "chat_title": "💬 Rythu Sahayata AI Chatbot (Farmer Advisory)",
-        "chat_caption": "Ask in English, Telugu, or Tanglish (e.g., 'Dealer 6600 isthe ivvocha?')",
+        "chat_caption": (
+            "Ask in English, Telugu, or Tanglish (e.g., 'Dealer 6600 isthe"
+            " ivvocha?')"
+        ),
         "chat_placeholder": "Ask your mandi query here...",
         "audio_lang": "en",
     },
@@ -141,15 +170,31 @@ LANG = {
         "ceiling_label": "గరిష్ట నాణ్యత గల ధర (P90)",
         "arrivals_label": "మార్కెట్ రాకలు (క్వింటాళ్ళు)",
         "history_title": "గత 30 రోజుల ట్రెండ్ మరియు నేటి బేరసారాల పరిధి",
-        "hourly_title": "⏰ మార్కెట్ వేలం సమయాల వారీగా అంచనా ధరలు (గంటల వారీగా)",
+        "hourly_title": (
+            "⏰ మార్కెట్ వేలం సమయాల వారీగా అంచనా ధరలు (గంటల వారీగా)"
+        ),
         "advisory_title": "💡 వ్యాపారితో బేరసారాల సలహా",
-        "bid_good": "✅ **మంచి రేటు:** వ్యాపారి ధర సరసమైన ధర కంటే ఎక్కువగా ఉంది. అమ్మవచ్చు.",
-        "bid_warning": "⚠️ **హెచ్చరిక:** వ్యాపారి ఆఫర్ ₹{diff:,.0f}/క్వింటాలు తక్కువగా ఉంది. మొత్తం నష్టం: మీ {qty} క్వింటాళ్ళకు **₹{total_loss:,.0f}**.",
-        "bid_danger": "🚨 **తీవ్ర నష్టం:** వ్యాపారి కనీస రక్షణ ధర కంటే ₹{diff:,.0f}/క్వింటాలు తక్కువ ఇస్తున్నాడు! మొత్తం కోల్పోతున్న మొత్తం: **₹{total_loss:,.0f}** ({qty} క్వింటాళ్ళు).",
+        "bid_good": (
+            "✅ **మంచి రేటు:** వ్యాపారి ధర సరసమైన ధర కంటే ఎక్కువగా ఉంది."
+            " అమ్మవచ్చు."
+        ),
+        "bid_warning": (
+            "⚠️ **హెచ్చరిక:** వ్యాపారి ఆఫర్ ₹{diff:,.0f}/క్వింటాలు తక్కువగా"
+            " ఉంది. మొత్తం నష్టం: మీ {qty} క్వింటాళ్ళకు **₹{total_loss:,.0f}**."
+        ),
+        "bid_danger": (
+            "🚨 **తీవ్ర నష్టం:** వ్యాపారి కనీస రక్షణ ధర కంటే"
+            " ₹{diff:,.0f}/క్వింటాలు తక్కువ ఇస్తున్నాడు! మొత్తం కోల్పోతున్న మొత్తం:"
+            " **₹{total_loss:,.0f}** ({qty} క్వింటాళ్ళు)."
+        ),
         "arbitrage_title": "📊 సమీప మార్కెట్లలో ధరల వ్యత్యాసం (ఆర్బిట్రేజ్)",
-        "transport_calc_title": "🚚 రవాణా ఖర్చులు పోను నికర లాభం (Net Profit) కాలిక్యులేటర్",
+        "transport_calc_title": (
+            "🚚 రవాణా ఖర్చులు పోను నికర లాభం (Net Profit) కాలిక్యులేటర్"
+        ),
         "vs_yesterday": "నిన్నటితో పోలిస్తే",
-        "penalty_warning": "తేమ శాతం ఎక్కువ ఉన్నందుకు తగ్గింపు: -₹{penalty:.0f}/క్వింటాలు",
+        "penalty_warning": (
+            "తేమ శాతం ఎక్కువ ఉన్నందుకు తగ్గింపు: -₹{penalty:.0f}/క్వింటాలు"
+        ),
         "per_qtl": "రూ. / క్వింటాలు",
         "slip_title": "📱 అధికారిక మార్కెట్ రసీదు స్లిప్ (వాట్సాప్ / ఎస్ఎంఎస్)",
         "vehicle_type": "రవాణా వాహనాన్ని ఎంచుకోండి:",
@@ -157,13 +202,18 @@ LANG = {
         "copy_slip": "📋 రసీదును కాపీ చేయండి",
         "whatsapp_button": "📲 వాట్సాప్‌లో పంపండి",
         "chat_title": "💬 రైతు సహాయత AI చాట్‌బాట్ (మార్కెట్ సలహాదారు)",
-        "chat_caption": "తెలుగు లేదా ఇంగ్లీషులో అడగండి (ఉదా: 'వ్యాపారి 6600 ఇస్తానంటే అమ్మాలా వద్దా?')",
+        "chat_caption": (
+            "తెలుగు లేదా ఇంగ్లీషులో అడగండి (ఉదా: 'వ్యాపారి 6600 ఇస్తానంటే అమ్మాలా"
+            " వద్దా?')"
+        ),
         "chat_placeholder": "మీ సందేహాన్ని ఇక్కడ టైప్ చేయండి...",
         "audio_lang": "te",
     },
 }
 
-lang_choice = st.sidebar.radio("భాష / Language:", ["English", "తెలుగు"], horizontal=True)
+lang_choice = st.sidebar.radio(
+    "భాష / Language:", ["English", "తెలుగు"], horizontal=True
+)
 T = LANG[lang_choice]
 
 st.title(T["title"])
@@ -561,7 +611,7 @@ st.link_button(
     width="stretch",
 )
 
-# AI Advisory Chatbot Section with Neural TTS Voice
+# AI Advisory Chatbot Section with Neural TTS Playback
 st.markdown("---")
 st.subheader(T["chat_title"])
 st.caption(T["chat_caption"])
